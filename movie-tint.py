@@ -12,10 +12,10 @@ FRAMES_PER_PIXEL = 48
 
 # display progress window?
 # updates whole image, not very efficient, disable for very large images
-SHOW_PROGRESS = False
+SHOW_PROGRESS = True
 
 # stop after frame x
-MAX_MOVIE_FRAMES = 1000 #sys.maxint
+MAX_MOVIE_FRAMES = sys.maxint
 
 # downscaled frame height in pixels
 # increase this for more precision, esp. when FRAMES_PER_PIXEL is low
