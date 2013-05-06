@@ -3,16 +3,17 @@ import numpy as np
 import math, sys
 from progressbar import Bar, ETA, Percentage, ProgressBar, Widget
 from time import time
+from itertools import izip
 
 # Call with an input movie file and output file name,
 # e.g. python movie-tint my-movie.avi my-tint.png
 
 # how many movie frames should one (horizontal) pixel cover?
-FRAMES_PER_PIXEL = 1
+FRAMES_PER_PIXEL = 48
 
 # display progress window?
 # updates whole image, not very efficient, disable for very large images
-SHOW_PROGRESS = False
+SHOW_PROGRESS = True
 
 # select a clip
 START_FRAME = 0
@@ -80,23 +81,17 @@ def draw_overlay(radius, color, sub_result):
 	blurred_circle = draw_gauss(radius, color).reshape((-1, 3))
 	flat_sub_result = sub_result.reshape((-1, 3))
 
-	#TODO enumerate with numpy to speed up?
-	for i, back in enumerate(flat_sub_result):
-		circ = blurred_circle[i]
-		if back[2] == 0:
-			flat_sub_result[i] = circ
-		else:
-			sv = int(circ[2]) + int(back[2])
-			if sv > 0:
-				opacity = float(circ[2]) / sv
-				l_hue = int(opacity * circ[0] + (1 - opacity) * back[0])
-				l_sat = opacity * circ[1] + (1 - opacity) * back[1]
-				l_val = max(circ[2], back[2])
-				flat_sub_result[i] = [l_hue, l_sat, l_val]
-			else:
-				flat_sub_result[i] = [0, 0, 0]
+	circle_vals = blurred_circle[:,2].astype('float')
+	val_sum = circle_vals + flat_sub_result[:,2]
 
-	return flat_sub_result.reshape(sub_result.shape)
+	# division by zero ignored
+	opacity = circle_vals / val_sum
+
+	hue_channel = blurred_circle[:,0] * opacity + flat_sub_result[:,0] * (1 - opacity)
+	sat_channel = blurred_circle[:,1] * opacity + flat_sub_result[:,1] * (1 - opacity)
+	val_channel = np.maximum(blurred_circle[:,2], flat_sub_result[:,2])
+	chans = np.dstack((hue_channel.astype('uint8'), sat_channel.astype('uint8'), val_channel))
+	return chans.reshape(sub_result.shape)
 
 class MovieHistogram():
 
@@ -202,6 +197,10 @@ class MovieHistogram():
 
 		self.result_image = np.zeros((self.height + self.offset * 2,
 									  self.number_of_chunks + self.offset * 2, 3), np.uint8)
+
+		# will be doing div by zero in draw_gauss
+		np.seterr(invalid='ignore')
+
 		for chunk_count, frame_data in enumerate(self.chunks()):
 			self.process_chunk(chunk_count, frame_data)
 
