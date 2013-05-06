@@ -8,14 +8,15 @@ from time import time
 # e.g. python movie-tint my-movie.avi my-tint.png
 
 # how many movie frames should one (horizontal) pixel cover?
-FRAMES_PER_PIXEL = 48
+FRAMES_PER_PIXEL = 1
 
 # display progress window?
 # updates whole image, not very efficient, disable for very large images
-SHOW_PROGRESS = True
+SHOW_PROGRESS = False
 
-# stop after frame x
-MAX_MOVIE_FRAMES = sys.maxint
+# select a clip
+START_FRAME = 0
+END_FRAME = sys.maxint
 
 # downscaled frame height in pixels
 # increase this for more precision, esp. when FRAMES_PER_PIXEL is low
@@ -110,6 +111,7 @@ class MovieHistogram():
 
 	def init_capture(self, file_name):
 		self.cap = cv2.VideoCapture(file_name)	
+		self.cap.set(cv2.cv.CV_CAP_PROP_POS_FRAMES, START_FRAME)
 		h = self.cap.get(cv2.cv.CV_CAP_PROP_FRAME_HEIGHT)
 		w = self.cap.get(cv2.cv.CV_CAP_PROP_FRAME_WIDTH)
 		self.aspect_ratio = float(h) / w
@@ -117,7 +119,7 @@ class MovieHistogram():
 		self.new_w = int(self.new_h / self.aspect_ratio)
 
 	def calc_chunk_size(self):
-		self.frame_count = min(MAX_MOVIE_FRAMES, self.cap.get(cv2.cv.CV_CAP_PROP_FRAME_COUNT))
+		self.frame_count = min(END_FRAME, self.cap.get(cv2.cv.CV_CAP_PROP_FRAME_COUNT)) - START_FRAME
 		self.chunk_size = FRAMES_PER_PIXEL
 		self.number_of_chunks = int(self.frame_count / self.chunk_size)
 		self.height = self.number_of_chunks * self.aspect_ratio
