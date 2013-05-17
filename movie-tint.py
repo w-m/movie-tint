@@ -63,34 +63,39 @@ def draw_gauss(radius, color):
 	"""Draw a blurry circle in an hsv color"""
 	hue, sat, val = color
 	circle_env = radius * 2
-	circle = np.ndarray((circle_env * 2 + 1, circle_env * 2 + 1, 3), dtype = np.uint8)
+	circle = np.ndarray((circle_env * 2 + 1, circle_env * 2 + 1, 4), dtype = np.uint8)
 
-	# value will be blurred outside the circle
+	# alpha will be blurred outside the circle
 	# hue, sat need to be constant everywhere
-	circle[:, :, :] = [hue, sat, 0]
-	cv2.circle(circle, (circle_env, circle_env), radius, color, -1)
+	circle[:,:,:] = [hue, sat, val, 0]
+	cv2.circle(circle, (circle_env, circle_env), radius, [hue, sat, val, 255], -1)
 
 	gauss_size = max(radius, 3)
 	if gauss_size % 2 == 0:
 		gauss_size += 1
-	circle[:, :, 2] = cv2.GaussianBlur(circle[:, :, 2], (gauss_size, gauss_size), 0)
+
+	# blur alpha
+	circle[:, :, 3] = cv2.GaussianBlur(circle[:, :, 3], (gauss_size, gauss_size), 0)
 	return circle
 
 def draw_overlay(radius, color, sub_result):
 	"""Draw blurry circles, blend them with the background image"""
-	blurred_circle = draw_gauss(radius, color).reshape((-1, 3))
-	flat_sub_result = sub_result.reshape((-1, 3))
+	blurred_circle = draw_gauss(radius, color).reshape((-1, 4))
+	flat_sub_result = sub_result.reshape((-1, 4))
 
-	circle_vals = blurred_circle[:,2].astype('float')
-	val_sum = circle_vals + flat_sub_result[:,2]
+	result_alpha = flat_sub_result[:,3].astype('float')
+	circle_alpha = blurred_circle[:,3].astype('float')
+	alpha_sum = result_alpha + circle_alpha
+	alpha = circle_alpha / alpha_sum
+	alpha_inv = 1 - alpha
 
-	# division by zero ignored
-	opacity = circle_vals / val_sum
+	new_alpha = np.minimum(alpha_sum, 255)
 
-	hue_channel = blurred_circle[:,0] * opacity + flat_sub_result[:,0] * (1 - opacity)
-	sat_channel = blurred_circle[:,1] * opacity + flat_sub_result[:,1] * (1 - opacity)
-	val_channel = np.maximum(blurred_circle[:,2], flat_sub_result[:,2])
-	chans = np.dstack((hue_channel.astype('uint8'), sat_channel.astype('uint8'), val_channel))
+	hue_channel = blurred_circle[:,0] * alpha + flat_sub_result[:,0] * alpha_inv
+	sat_channel = blurred_circle[:,1] * alpha + flat_sub_result[:,1] * alpha_inv
+	val_channel = blurred_circle[:,2] * alpha + flat_sub_result[:,2] * alpha_inv
+
+	chans = np.dstack((hue_channel.astype('uint8'), sat_channel.astype('uint8'), val_channel.astype('uint8'), new_alpha.astype('uint8')))
 	return chans.reshape(sub_result.shape)
 
 class MovieHistogram():
@@ -122,7 +127,7 @@ class MovieHistogram():
 		print "result image: %d x %d px" % (self.number_of_chunks, self.height)
 
 		self.px_per_hue_class = self.height / 180
-		self.circle_radius = self.px_per_hue_class * 3
+		self.circle_radius = self.px_per_hue_class * 2
 		self.offset = self.circle_radius * 4
 
 	def init_progressbar(self):
@@ -165,8 +170,21 @@ class MovieHistogram():
 			yield frame_data
 
 	def create_output(self):
-		back_shift = hue_shift(self.result_image, 150).astype('uint8')
-		return cv2.cvtColor(back_shift, cv2.COLOR_HSV2BGR)
+
+		result = self.result_image[:,:,:3]
+		back_shift = hue_shift(result, 150).astype('uint8')
+		converted = cv2.cvtColor(back_shift, cv2.COLOR_HSV2BGR)
+
+		alpha = self.result_image[:,:,3].astype('float') / 255
+		alpha_inv = 1 - alpha
+
+		r, b, g = 0, 0, 0
+
+		converted[:,:,0] = converted[:,:,0] * alpha + b * alpha_inv
+		converted[:,:,1] = converted[:,:,1] * alpha + g * alpha_inv
+		converted[:,:,2] = converted[:,:,2] * alpha + r * alpha_inv
+
+		return converted
 
 	def finish(self):
 		cv2.destroyAllWindows()
@@ -174,6 +192,7 @@ class MovieHistogram():
 		return cv2.imwrite(self.output_file, self.create_output())
 	
 	def process_chunk(self, chunk_count, frame_data):
+
 		for weight, hsv in kmeans(frame_data):
 			hue, sat, val = hsv
 
@@ -182,7 +201,7 @@ class MovieHistogram():
 			draw_hue = relative_hue_position  + self.offset
 			color = map(int, hsv)
 
-			radius = int(self.circle_radius * weight)
+			radius = int(math.ceil(self.circle_radius * weight))
 
 			if radius > 0:
 				circle_env = radius * 2
@@ -190,13 +209,14 @@ class MovieHistogram():
 				sub_result = self.result_image[center[0] - circle_env : center[0] + circle_env + 1,
 				 			              center[1] - circle_env : center[1] + circle_env + 1, :]
 				flat_sub_result = draw_overlay(radius, color, sub_result)
+
 				self.result_image[center[0] - circle_env : center[0] + circle_env + 1,
 			                center[1] - circle_env : center[1] + circle_env + 1, :] = flat_sub_result
 
 	def process_file(self):
 
 		self.result_image = np.zeros((self.height + self.offset * 2,
-									  self.number_of_chunks + self.offset * 2, 3), np.uint8)
+									  self.number_of_chunks + self.offset * 2, 4), np.uint8)
 
 		# will be doing div by zero in draw_gauss
 		np.seterr(invalid='ignore')
