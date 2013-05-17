@@ -59,6 +59,20 @@ class FPS(Widget):
 		self.last_update = current_time
 		return "Frames per second: %d" % fps
 
+class FPSProgressBar():
+	def __init__(self, number_of_chunks, chunk_size):
+		self.fps_widget = FPS()
+		self.chunk_size = chunk_size
+		widgets = ['Progress: ', Percentage(), ' ', Bar(), ' ', self.fps_widget, ' | ', ETA()]
+		self.pbar = ProgressBar(widgets=widgets, maxval=number_of_chunks).start()
+
+	def update(self, chunk_count):
+		self.fps_widget.total_frames += self.chunk_size
+		self.pbar.update(chunk_count)
+
+	def finish(self):
+		self.pbar.finish()
+
 def draw_gauss(radius, color):
 	"""Draw a blurry circle in an hsv color"""
 	hue, sat, val = color
@@ -98,25 +112,18 @@ def draw_overlay(radius, color, sub_result):
 	chans = np.dstack((hue_channel.astype('uint8'), sat_channel.astype('uint8'), val_channel.astype('uint8'), new_alpha.astype('uint8')))
 	return chans.reshape(sub_result.shape)
 
-class MovieHistogram():
-
-	def __init__(self, file_name, output_file):
-		
-		self.output_file = output_file
-
-		self.init_capture(file_name)
-		self.calc_chunk_size()
-		self.init_progressbar()
-		self.process_file()
-
-	def init_capture(self, file_name):
+class Capture():
+	"""Read frames from an input file, resize them"""
+	def __init__(self, file_name, frame_height):
 		self.cap = cv2.VideoCapture(file_name)	
 		self.cap.set(cv2.cv.CV_CAP_PROP_POS_FRAMES, START_FRAME)
 		h = self.cap.get(cv2.cv.CV_CAP_PROP_FRAME_HEIGHT)
 		w = self.cap.get(cv2.cv.CV_CAP_PROP_FRAME_WIDTH)
 		self.aspect_ratio = float(h) / w
-		self.new_h = FRAME_HEIGHT
+		self.new_h = frame_height
 		self.new_w = int(self.new_h / self.aspect_ratio)
+
+		self.calc_chunk_size()
 
 	def calc_chunk_size(self):
 		self.frame_count = min(END_FRAME, self.cap.get(cv2.cv.CV_CAP_PROP_FRAME_COUNT)) - START_FRAME
@@ -126,25 +133,11 @@ class MovieHistogram():
 		print "frames: %d, chunks: %d, frames per chunk: %d" % (self.frame_count, self.number_of_chunks, self.chunk_size)
 		print "result image: %d x %d px" % (self.number_of_chunks, self.height)
 
-		self.px_per_hue_class = self.height / 180
-		self.circle_radius = self.px_per_hue_class * 2
-		self.offset = self.circle_radius * 4
-
-	def init_progressbar(self):
-		self.fps_widget = FPS()
-		widgets = ['Progress: ', Percentage(), ' ', Bar(), ' ', self.fps_widget, ' | ', ETA()]
-		self.pbar = ProgressBar(widgets=widgets, maxval=self.number_of_chunks).start()
-
 	def read_frame(self):
 		f, image = self.cap.read()
 		if not f: return False, None
-
 		smaller = cv2.resize(image, (self.new_w, self.new_h))
-		hsv_smaller = cv2.cvtColor(smaller, cv2.COLOR_BGR2HSV)
-
-		# + 60 degrees --> line up red
-		shifted = hue_shift(hsv_smaller, 30)  
-		return f, shifted.reshape((-1,3))
+		return True, smaller #.reshape((-1,3))
 
 	def read_chunk(self):
 		first_frame = True
@@ -168,6 +161,21 @@ class MovieHistogram():
 			if not success:
 				break
 			yield frame_data
+
+class MovieHistogram():
+
+	def __init__(self, file_name, output_file):
+		
+		self.output_file = output_file
+
+		self.capture = Capture(file_name, FRAME_HEIGHT)
+
+		self.px_per_hue_class = self.capture.height / 180
+		self.circle_radius = self.px_per_hue_class * 2
+		self.offset = self.circle_radius * 4
+
+		self.pbar = FPSProgressBar(self.capture.number_of_chunks, self.capture.chunk_size)
+		self.process_file()
 
 	def create_output(self):
 
@@ -198,7 +206,7 @@ class MovieHistogram():
 
 			relative_hue_position = (hue * self.px_per_hue_class +
 									self.px_per_hue_class / 2)
-			draw_hue = relative_hue_position  + self.offset
+			draw_hue = relative_hue_position + self.offset
 			color = map(int, hsv)
 
 			radius = int(math.ceil(self.circle_radius * weight))
@@ -215,16 +223,19 @@ class MovieHistogram():
 
 	def process_file(self):
 
-		self.result_image = np.zeros((self.height + self.offset * 2,
-									  self.number_of_chunks + self.offset * 2, 4), np.uint8)
+		self.result_image = np.zeros((self.capture.height + self.offset * 2,
+									  self.capture.number_of_chunks + self.offset * 2, 4), np.uint8)
 
 		# will be doing div by zero in draw_gauss
 		np.seterr(invalid='ignore')
 
-		for chunk_count, frame_data in enumerate(self.chunks()):
-			self.process_chunk(chunk_count, frame_data)
+		for chunk_count, frame_data in enumerate(self.capture.chunks()):
+			hsv = cv2.cvtColor(frame_data, cv2.COLOR_BGR2HSV)
+			# + 60 degrees --> line up red
+			shifted = hue_shift(hsv, 30)  
+			flat = shifted.reshape((-1,3))
+			self.process_chunk(chunk_count, flat)
 
-			self.fps_widget.total_frames += self.chunk_size
 			self.pbar.update(chunk_count)
 
 			if SHOW_PROGRESS:
